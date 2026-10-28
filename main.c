@@ -804,6 +804,19 @@ done:
 
 
 /**
+ * Non-zero if st describes the live backup destination. Descending into it
+ * would copy the backup into itself, forever.
+ **/
+static int
+is_backup_root(const struct stat *st) {
+  struct stat root;
+
+  return !stat(BACKUP_ROOT, &root) && root.st_dev == st->st_dev &&
+         root.st_ino == st->st_ino;
+}
+
+
+/**
  * Back up everything below the directory src into dst, recursively.
  **/
 static void
@@ -836,6 +849,13 @@ backup_tree(const char *src, const char *dst, backup_stats_t *stats) {
     }
 
     if(S_ISDIR(st.st_mode)) {
+      /* The destination lives inside the tree being copied whenever an entry
+       * is one of its ancestors. Skip it by identity, not by name, so the
+       * walk stops here instead of recursing into the growing backup. */
+      if(is_backup_root(&st)) {
+        logq("Skipping backup destination %s", spath);
+        continue;
+      }
       backup_tree(spath, dpath, stats);
     } else if(S_ISREG(st.st_mode)) {
       backup_file(spath, dpath, &st, stats);
@@ -1684,6 +1704,16 @@ backup_entry(char *line, backup_stats_t *stats) {
 
   if(stat(line, &st)) {
     logq("Failed to backup %s", line);
+    stats->failed++;
+    return;
+  }
+
+  /* A lone wildcard ("*") collapses to "/" above, and "/.." resolves to it.
+   * Copying the whole filesystem to the USB drive is never intended: refuse it
+   * by identity so that every spelling of the root is covered. */
+  struct stat root;
+  if(!stat("/", &root) && root.st_dev == st.st_dev && root.st_ino == st.st_ino) {
+    logq("Refusing to back up the filesystem root: %s", line);
     stats->failed++;
     return;
   }
