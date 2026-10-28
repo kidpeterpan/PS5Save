@@ -56,29 +56,44 @@ activity_add(const char *title, const char *origin) {
   activity.count++;
 }
 
-/* A sandbox name may have a suffix, e.g. PPSA12345_000. Never use a mere
- * substring match between two title IDs. Unidentified sandboxes fail closed. */
+/* An application sandbox has exactly one of two layouts:
+ *   /mnt/sandbox/<TITLE>_<digits>[/...]
+ *   /mnt/sandbox/pfsmnt/<TITLE>-app0[/...]
+ * Never use a mere substring match between two title IDs. Other mounts below
+ * /mnt/sandbox (downloads, staging areas) are not liveness evidence and must
+ * not block every title. */
+static int
+sandbox_title(const char *p, char title[10]) {
+  if(strlen(p) < 9) return 0;
+  memcpy(title, p, 9);
+  title[9] = 0;
+  return title_valid(title);
+}
+
 static void
 activity_mount(const char *path) {
   const char *p = strstr(path, "/mnt/sandbox/");
+  const char *q;
+  char title[10];
+
   if(!p) return;
   p += strlen("/mnt/sandbox/");
-  /* Covers both title sandboxes and /mnt/sandbox/pfsmnt/TITLE-app0. */
-  while(*p) {
-    if(!strncmp(p, "NPXS", 4)) return;
-    if(strlen(p) >= 9) {
-      char title[10];
-      memcpy(title, p, 9); title[9] = 0;
-      if(title_valid(title) && (!p[9] || p[9] == '_' || p[9] == '/' || p[9] == '-')) {
-        activity_add(title, path);
-        return;
-      }
-    }
-    p = strchr(p, '/');
-    if(!p) break;
-    p++;
+
+  if(!strncmp(p, "pfsmnt/", 7)) {
+    q = p + 7;
+    if(!sandbox_title(q, title) || strncmp(q + 9, "-app0", 5)) return;
+    q += 14;
+    if(*q && *q != '/') return;
+    activity_add(title, path);
+    return;
   }
-  activity_unknown("unidentified sandbox mount: %.112s", path);
+
+  if(!sandbox_title(p, title) || p[9] != '_') return;
+  q = p + 10;
+  if(!isdigit((unsigned char)*q)) return;
+  while(isdigit((unsigned char)*q)) q++;
+  if(*q && *q != '/') return;
+  activity_add(title, path);
 }
 
 /* Shared directory exports are not game-liveness evidence. ShadowMountPlus
